@@ -1,0 +1,17 @@
+
+VCFtools - v0.1.13
+(C) Adam Auton and Anthony Marcketta 2009
+
+Parameters as interpreted:
+	--vcf myae.vcf
+	--recode-INFO-all
+	--maf 0.01
+	--max-alleles 2
+	--maxDP 250
+	--min-alleles 2
+	--minDP 5
+	--max-missing 0.7
+	--out myae.filtered
+	--remove-indels
+
+Error: Can't determine file type of myae.vcf

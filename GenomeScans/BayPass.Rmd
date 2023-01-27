@@ -1,0 +1,1630 @@
+---
+title: "RADseq"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Install BayPass
+
+```{bash, eval=F}
+cd ~/softs
+wget http://www1.montpellier.inra.fr/CBGP/software/baypass/files/baypass_2.3.tar.gz
+tar -zxvf baypass_2.3.tar.gz
+cd baypass_2.3/sources/
+make clean all FC=gfortran
+~/softs/baypass_2.3/sources/g_baypass
+```
+
+# Prepare data
+
+## vcf(s) -> geno(s)
+
+```{bash, eval=F}
+cd /home/vincent/MET/GenomeScans
+scp vmerel@curnagl.dcsr.unil.ch:/work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/stacks_myae/populations.snps.vcf ./myae.vcf
+
+#Filtering vcf for biallelic markers only
+~/soft/vcftools_0.1.13/bin/vcftools \
+--vcf myae.vcf \
+--remove-indels  \
+--maf 0.01 \
+--min-alleles 2 \
+--max-alleles 2 \
+--max-missing 0.7 \
+--minDP 5 \
+--maxDP 250 \
+--recode \
+--recode-INFO-all --out myae.filtered
+#--max-alleles
+
+#--minGQ 20 \
+
+
+cd /home/vincent/MET/GenomeScans
+
+#Pops file
+awk -F'\t' '{
+if($34!="indet." && $34!="sex") 
+{print substr($1,5)"\t"$16}
+}' ~/mse/RADseq/Myrmecophilus_samples_simon.csv > Pops.txt
+
+cd /home/vincent/met/GenomeScans
+
+python3 /home/vincent/met/GenomeScans/vcfToBayPass.py \
+--groups /home/vincent/MET/GenomeScans/Pops.txt \
+--vcf /home/vincent/MET/GenomeScans/myae.filtered.recode.vcf \
+--contigs /home/vincent/MET/GenomeScans/PA.contigs \
+--output /home/vincent/MET/GenomeScans/baypass
+
+wc -l /home/vincent/MET/GenomeScans/baypass.geno
+
+#Contrast file
+#Pops file
+awk -F'\t' '{
+  if ($34!="indet." && $34!="sex") 
+    {
+    if ($2=="M. aequispina")
+      {print substr($1,5)"\t"$16"\t1"}
+    if ($2=="M. myrmecophilus")
+      {print substr($1,5)"\t"$16"\t-1"}
+    if ($2!="M. myrmecophilus" && $2!="M. aequispina")
+      {print substr($1,5)"\t"$16"\t0"}
+    }
+}' ~/mse/RADseq/Myrmecophilus_samples_simon.csv #you stupide
+
+~/soft/baypass_2.3/sources/g_baypass -gfile /home/vincent/MET/GenomeScans/baypass.geno
+
+```
+
+```{r, eval=F}
+
+#source the baypass R functions (check PATH)
+source("/home/vincent/soft/baypass_2.3/utils/baypass_utils.R")
+#upload the estimated Omega matrix
+omega=as.matrix(read.table("/home/vincent/met/GenomeScans/mat_omega.out"))
+pop.names=c('Alpilles', 'Vaucluse', 'Gard', 'Bouches-du-Rhones', 'Collias', 'Montpellier', 'Grece', 'Mornas', 'Vienne')
+dimnames(omega)=list(pop.names,pop.names)
+
+# Visualization of the matrix
+plot.omega(omega=omega,pop.names=pop.names)
+
+# as a correlation plot
+require(corrplot)
+cor.mat=cov2cor(omega)
+corrplot(cor.mat,method="color",mar=c(2,1,2,2)+0.1,
+main=expression("Correlation map based on"~hat(Omega)))
+
+# as a heatmap and hierarchical clustering tree (using the average agglomeration method)
+hclust.ave <- function(x) hclust(x, method="average")
+heatmap(1-cor.mat,hclustfun = hclust.ave,
+main=expression("Heatmap of "~hat(Omega)~"("*d[ij]*"=1-"*rho[ij]*")"))
+```
+
+```{bash, eval=F}
+cd 
+tail -n +2 /home/vincent/met/GenomeScans/summary_pi_xtx.out > /home/vincent/met/GenomeScans/summary_pi_xtx.wo_header.out
+
+cat /home/vincent/met/GenomeScans/summary_pi_xtx.wo_header.out | tr -s " " | cut -f 5 -d ' ' > /home/vincent/met/GenomeScans/M_XtX
+cat /home/vincent/met/GenomeScans/summary_pi_xtx.wo_header.out | tr -s " " | cut -f 7 -d ' ' > /home/vincent/met/GenomeScans/XtXst
+wc -l /home/vincent/met/GenomeScans/summary_pi_xtx.wo_header.out
+wc -l /home/vincent/MET/GenomeScans/baypass.geno
+wc -l /home/vincent/MET/GenomeScans/baypass.positions
+
+paste /home/vincent/MET/GenomeScans/baypass.positions /home/vincent/met/GenomeScans/XtXst > /home/vincent/met/GenomeScans/XtXst.track
+paste /home/vincent/MET/GenomeScans/baypass.positions /home/vincent/met/GenomeScans/M_XtX > /home/vincent/met/GenomeScans/M_XtX.track
+
+```
+
+```{r, eval=F}
+XtXst <- read.delim("~/met/GenomeScans/XtXst.track", header=FALSE)
+
+ctg.000105F
+1254244-2500
+1254244+2500
+
+```
+
+```{bash, eval=F}
+samtools faidx  /home/vincent/MSE/Assembly/Assembly.masked.fasta ctg.000105F:1251744-1256744
+
+
+
+```
+
+Let's have a look at quality on 10 randomly selected samples for simon ones
+
+```{bash, eval=F}
+cd /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/svogel/clean
+
+
+FQs=`ls *.fq.gz | shuf -n 10 | tr '\n' ' '`
+
+echo '#!/bin/bash -l
+
+#SBATCH --account=tschwand_default
+#SBATCH --mail-type NONE 
+#SBATCH --mail-user vincent.merel@unil.ch
+
+#SBATCH --chdir /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/svogel/clean
+#SBATCH --job-name fastqc
+#SBATCH --output fastqc.out
+#SBATCH --error fastqc.err
+
+#SBATCH --partition cpu
+
+#SBATCH --nodes 1 
+#SBATCH --ntasks 1 
+#SBATCH --cpus-per-task 12
+#SBATCH --mem 12G 
+#SBATCH --time 02:00:00 
+#SBATCH --export NONE
+
+module load gcc/9.3.0 fastqc/0.11.9
+fastqc '"$FQs"'' > fastqc.sh
+
+sbatch fastqc.shs
+
+cd /home/vincent/MSE/RADseq/svogel/clean
+scp vmerel@curnagl.dcsr.unil.ch:/work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/svogel/clean/*html ./
+```
+
+Let's look all the others 
+
+```{bash, eval=F}
+cd /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/20/
+
+
+FQs=`ls *.fq.gz | tr '\n' ' '`
+
+echo '#!/bin/bash -l
+
+#SBATCH --account=tschwand_default
+#SBATCH --mail-type NONE 
+#SBATCH --mail-user vincent.merel@unil.ch
+
+#SBATCH --chdir /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/20/
+#SBATCH --job-name fastqc
+#SBATCH --output fastqc.out
+#SBATCH --error fastqc.err
+
+#SBATCH --partition cpu
+
+#SBATCH --nodes 1 
+#SBATCH --ntasks 1 
+#SBATCH --cpus-per-task 12
+#SBATCH --mem 12G 
+#SBATCH --time 02:00:00 
+#SBATCH --export NONE
+
+module load gcc/9.3.0 fastqc/0.11.9
+fastqc -t 12 '"$FQs"'' > fastqc.sh
+
+sbatch fastqc.sh
+
+cd /home/vincent/MSE/RADseq/20
+scp vmerel@curnagl.dcsr.unil.ch:/work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/20/*html ./
+```
+
+# Trimming
+
+```{bash, eval=F}
+cd /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/svogel/clean
+mkdir Trimmed
+cd Trimmed
+
+cd /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/svogel/clean/Trimmed
+
+FQs=`ls ../*.fq.gz | xargs -n 1 basename | tr '\n' ' '`
+
+for FQ in $FQs
+do
+
+  ID=${FQ::-6}
+  
+  echo '#!/bin/bash -l
+
+#SBATCH --account=tschwand_default
+#SBATCH --mail-type NONE 
+#SBATCH --mail-user vincent.merel@unil.ch
+
+#SBATCH --chdir /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/svogel/clean/Trimmed
+#SBATCH --job-name TrimGalore.'"$ID"'
+#SBATCH --output TrimGalore.'"$ID"'.out
+#SBATCH --error TrimGalore.'"$ID"'.err
+
+#SBATCH --partition cpu
+
+#SBATCH --nodes 1 
+#SBATCH --ntasks 1 
+#SBATCH --cpus-per-task 1
+#SBATCH --mem 2G 
+#SBATCH --time 01:00:00 
+#SBATCH --export NONE
+
+module load gcc/9.3.0 cutadapt/3.4 fastqc/0.11.9
+~/softs/TrimGalore/trim_galore ../'"$FQ"'' > TrimGalore.$ID.sh
+
+sbatch TrimGalore.$ID.sh
+
+done
+
+for f in *.fq; do  ~/softs/TrimGalore-master/trim_galore $f; done
+
+```
+
+```{bash, eval=F}
+cd /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/20/
+mkdir Trimmed
+cd Trimmed
+
+cd /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/20/Trimmed
+
+FQs=`ls ../*.fq.gz | xargs -n 1 basename | tr '\n' ' '`
+
+for FQ in $FQs
+do
+
+  ID=${FQ::-6}
+  
+  echo '#!/bin/bash -l
+
+#SBATCH --account=tschwand_default
+#SBATCH --mail-type NONE 
+#SBATCH --mail-user vincent.merel@unil.ch
+
+#SBATCH --chdir /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/20/Trimmed
+#SBATCH --job-name TrimGalore.'"$ID"'
+#SBATCH --output TrimGalore.'"$ID"'.out
+#SBATCH --error TrimGalore.'"$ID"'.err
+
+#SBATCH --partition cpu
+
+#SBATCH --nodes 1 
+#SBATCH --ntasks 1 
+#SBATCH --cpus-per-task 1
+#SBATCH --mem 2G 
+#SBATCH --time 01:00:00 
+#SBATCH --export NONE
+
+module load gcc/9.3.0 cutadapt/3.4 fastqc/0.11.9
+~/softs/TrimGalore/trim_galore ../'"$FQ"'' > TrimGalore.$ID.sh
+
+sbatch TrimGalore.$ID.sh
+
+done
+
+
+```
+
+# Quality looking
+
+Let's have a look at quality on 10 randomly selected samples
+
+```{bash, eval=F}
+cd /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/svogel/clean/Trimmed
+
+
+FQs=`ls *.fq.gz | shuf -n 10 | tr '\n' ' '`
+
+echo '#!/bin/bash -l
+
+#SBATCH --account=tschwand_default
+#SBATCH --mail-type NONE 
+#SBATCH --mail-user vincent.merel@unil.ch
+
+#SBATCH --chdir /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/svogel/clean/Trimmed
+#SBATCH --job-name fastqc
+#SBATCH --output fastqc.out
+#SBATCH --error fastqc.err
+
+#SBATCH --partition cpu
+
+#SBATCH --nodes 1 
+#SBATCH --ntasks 1 
+#SBATCH --cpus-per-task 12
+#SBATCH --mem 12G 
+#SBATCH --time 02:00:00 
+#SBATCH --export NONE
+
+module load gcc/9.3.0 fastqc/0.11.9
+fastqc -t 10 '"$FQs"'' > fastqc.sh
+
+sbatch fastqc.sh
+
+cd /home/vincent/MSE/RADseq/svogel/clean/Trimmed
+ scp vmerel@curnagl.dcsr.unil.ch:/work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/svogel/clean/Trimmed/*html ./
+```
+
+```{bash, eval=F}
+cd /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/20/Trimmed
+
+
+FQs=`ls *.fq.gz | tr '\n' ' '`
+
+echo '#!/bin/bash -l
+
+#SBATCH --account=tschwand_default
+#SBATCH --mail-type NONE 
+#SBATCH --mail-user vincent.merel@unil.ch
+
+#SBATCH --chdir /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/20/Trimmed
+#SBATCH --job-name fastqc
+#SBATCH --output fastqc.out
+#SBATCH --error fastqc.err
+
+#SBATCH --partition cpu
+
+#SBATCH --nodes 1 
+#SBATCH --ntasks 1 
+#SBATCH --cpus-per-task 12
+#SBATCH --mem 12G 
+#SBATCH --time 02:00:00 
+#SBATCH --export NONE
+
+module load gcc/9.3.0 fastqc/0.11.9
+fastqc -t 10 '"$FQs"'' > fastqc.sh
+
+sbatch fastqc.sh
+
+cd /home/vincent/MSE/RADseq/20/Trimmed
+scp vmerel@curnagl.dcsr.unil.ch:/work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/20/Trimmed/*html ./
+```
+
+# Mapping
+
+```{bash, eval=F}
+#cp ~/bwa_mem_SLURM_script_maker.sh /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/svogel/clean/
+
+rm -r /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/All
+mkdir /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/All
+cd /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/All
+ln -s /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/svogel/clean/Trimmed/*fq.gz ./
+ln -s /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/20/Trimmed/*fq.gz ./
+
+cp /work/FAC/FBM/DEE/tschwand/default/vmerel/TGAs/myrmecophilus/blobtools/ipa/ipa.asm.decontaminated.fasta ./
+
+bash /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/svogel/clean/bwa_mem_SLURM_script_maker.sh \
+/work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/All/ \
+/work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/All/ipa.asm.decontaminated.fasta \
+4
+
+
+Sinteractive -c 2 -m 4G -t 01:00:00
+module load gcc/9.3.0
+module load bwa/0.7.17
+cd /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/All
+bwa index ipa.asm.decontaminated.fasta
+
+Scripts=`ls /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/bwa_mem_SLURM_scripts/*slurm.sh`
+
+for Script in $Scripts
+do
+  sbatch $Script
+done
+
+#some stats
+##A bedtools with N positions
+Sinteractive -c 2 -m 4G -t 01:00:00
+cd /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/All
+/users/vmerel/softs/faToTwoBit /work/FAC/FBM/DEE/tschwand/default/vmerel/TGAs/myrmecophilus/TRF/ipa/ipa.asm.decontaminated.fasta.masked.2.7.7.80.10.50.500.mask ipa.asm.decontaminated.2bits
+/users/vmerel/softs/twoBitInfo ipa.asm.decontaminated.2bits -nBed ipa.asm.decontaminated.N.bed
+
+cd /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/mapped/
+
+BAMs=`ls *bam | xargs -n 1 basename | grep -v "filtered"`
+
+for BAM in $BAMs
+do
+
+  SAMPLE=`echo $BAM | sed 's/_trimmed.bam//g'`
+  echo $SAMPLE
+  FASTQ=`ls /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/All/$SAMPLE*fq.gz | xargs -n 1 basename`
+  echo $FASTQ
+  echo '#!/bin/bash -l
+  
+#SBATCH --account=tschwand_default
+#SBATCH --mail-type NONE 
+#SBATCH --mail-user vincent.merel@unil.ch
+  
+#SBATCH --chdir /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/mapped/
+#SBATCH --job-name '"$SAMPLE"'_filtering
+#SBATCH --output '"$SAMPLE"'_filtering.out
+#SBATCH --error '"$SAMPLE"'_filtering.err
+  
+#SBATCH --partition cpu
+  
+#SBATCH --nodes 1 
+#SBATCH --ntasks 1 
+#SBATCH --cpus-per-task 2
+#SBATCH --mem 4G 
+#SBATCH --time 00:15:00 
+#SBATCH --export NONE
+
+module load gcc/9.3.0 samtools/1.12
+
+ONE=`echo $(zcat /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/All/'"$FASTQ"'|wc -l)/4|bc`
+TWO=`samtools view -c '"$BAM"'`
+THREE=`samtools view -c -F 260 '"$BAM"'`
+/users/vmerel/softs/bedtools intersect -abam '"$BAM"' -b ../All/ipa.asm.decontaminated.N.bed -v > '"$SAMPLE"'_filtered.bam
+FOUR=`samtools view -c '"$SAMPLE"'_filtered.bam`
+FIVE=`samtools view -c -F 260 '"$SAMPLE"'_filtered.bam`
+  
+echo '"$SAMPLE"'" "$ONE" "$TWO" "$THREE" "$FOUR" "$FIVE > '"$SAMPLE"'.stats' > /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/mapped/${SAMPLE}_filtering.sh
+
+sbatch /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/mapped/${SAMPLE}_filtering.sh
+done
+
+rm All.stats
+cat *stats > All.stats
+cd ~/MSE/RADseq/mapped 
+scp vmerel@curnagl.dcsr.unil.ch:/work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/mapped/All.stats ./
+```
+
+```{r, eval=F}
+All <- read.table("~/MSE/RADseq/mapped/All.stats", quote="\"", comment.char="")
+colnames(All) <- c("Sample",
+                   "NReads",
+                   "NAlns",
+                   "NPAlns",
+                   "NAlns_filtered",
+                   "NPAlns_filtered")
+
+All <- All %>% pivot_longer(2:6, "Categ", "Value") 
+
+Myrmecophilus_samples_simon <- read.delim("~/mse/RADseq/Myrmecophilus_samples_simon.csv") %>% mutate(Sample=substr(ID,5,8))
+
+All <- full_join(All, Myrmecophilus_samples_simon, by="Sample")
+
+ggplot(All[All$sex!="indet." & !is.na(All$sex) & All$Categ=="NReads",],
+       aes(x=Sample,
+           y=value,
+           color=Categ))+
+  geom_point()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  facet_wrap(.~sex, scales="free")
+
+ggplot(All[All$sex!="indet." & !is.na(All$sex) & All$Categ=="NReads",],
+       aes(x=sex,
+           y=value,
+           color=sex))+
+  geom_boxplot()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+ggplot(All[All$sex!="indet." & !is.na(All$sex),],
+       aes(x=Sample,
+           y=value,
+           color=Categ))+
+  geom_point()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  facet_wrap(.~sex, scales="free")
+
+Per <- read.table("~/MSE/RADseq/mapped/All.stats", quote="\"", comment.char="")
+colnames(Per) <- c("Sample",
+                   "NReads",
+                   "NAlns",
+                   "NPAlns",
+                   "NAlns_filtered",
+                   "NPAlns_filtered")
+Per$NAlns <- Per$NAlns/Per$NReads*100
+Per$NPAlns <- Per$NPAlns/Per$NReads*100
+Per$NAlns_filtered <- Per$NAlns_filtered/Per$NReads*100
+Per$NPAlns_filtered <- Per$NPAlns_filtered/Per$NReads*100
+
+Per <- Per %>% select(-NReads) %>% pivot_longer(2:5, "Categ", "Value")
+
+ggplot(Per,
+       aes(x=Sample,
+           y=value,
+           color=Categ))+geom_point()
+
+Plop <- full_join(Per, Myrmecophilus_samples_simon, by="Sample")
+
+ggplot(Plop[Plop$sex!="indet." & !is.na(Plop$sex),],
+       aes(x=Sample,
+           y=value,
+           color=Categ))+geom_point()+facet_wrap(.~sex, scales='free')
+
+ggplot(Plop,
+       aes(x=sex,
+           y=value,
+           color=Categ))+geom_boxplot()+facet_wrap(.~Categ)
+```
+
+Re-Grouping bam
+
+```{bash, eval=F}
+#linking
+cd /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/mapped/
+Files=`ls *_filtered.bam | xargs -n 1 basename`
+for File in $Files
+do
+  echo $File
+  Sample=`echo $File | sed 's/_filtered.bam//g'`
+  echo $Sample
+  rm $Sample.bam
+  ln -s $File $Sample.bam
+done
+```
+
+# vcf
+
+## myae
+
+```{bash, eval=F}
+scp /home/vincent/mse/RADseq/Myrmecophilus_samples_simon.csv vmerel@curnagl.dcsr.unil.ch:/work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/
+
+mkdir /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/stacks_myae
+cd /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/stacks_myae
+
+
+for File in `sed 1,1D ../Myrmecophilus_samples_simon.csv  | sed  's/19.0//g' | awk '{print $1}'`
+do
+  echo $File
+  ls /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/mapped/$File.bam
+done
+
+
+
+awk -F'\t' '{
+if($34!="indet." && $34!="sex") 
+{print substr($1,5), "myae"}
+}' ../Myrmecophilus_samples_simon.csv | tr ' ' '\t' > popmap.txt
+#echo 'Myr_1 Myr
+#Myr_2 Myr
+#Myr_3 Myr
+#Myr_4 Myr
+#Myr_5 Myr
+#Myr_F Myr
+#Myr_Ya Myr
+#Myr_Yb Myr' | tr ' ' '\t' >> popmap.txt
+
+
+echo '#!/bin/bash -l
+
+#SBATCH --account=tschwand_default
+#SBATCH --mail-type NONE 
+#SBATCH --mail-user vincent.merel@unil.ch
+
+#SBATCH --chdir /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/stacks_myae
+#SBATCH --job-name gstacks_populations
+#SBATCH --output gstacks_populations.out
+#SBATCH --error gstacks_populations.err
+
+#SBATCH --partition cpu
+
+#SBATCH --nodes 1 
+#SBATCH --ntasks 1 
+#SBATCH --cpus-per-task 12
+#SBATCH --mem 24G 
+#SBATCH --time 12:00:00 
+#SBATCH --export NONE
+
+module load gcc/9.3.0 stacks/2.53
+
+gstacks -I /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/mapped/ \
+-M ./popmap.txt \
+-O ./ -t 12
+
+populations -P ./ \
+-M ./popmap.txt \
+--vcf \
+--genepop \
+--fstats \
+--smooth \
+--min-maf 0 \
+--write-single-snp \
+--hwe -t 12
+
+#-r 0.65 \
+' > /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/stacks_myae/gstacks_populations.sh
+
+sbatch /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/stacks_myae/gstacks_populations.sh
+
+
+cd ~/MSE/RADseq/
+cp myae.vcf myae.vcf.saved
+scp vmerel@curnagl.dcsr.unil.ch:/work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/stacks_myae/populations.snps.vcf ./myae.vcf
+
+
+#coverag
+
+
+~/soft/vcftools_0.1.13/bin/vcftools \
+--vcf myae.vcf \
+--geno-depth --out myae.depth
+
+```
+
+```{r, eval=F}
+myae.depth <- read.delim("~/MSE/RADseq/myae.depth.gdepth")
+colnames(myae.depth) <- gsub("X","",colnames(myae.depth))
+
+myae.depth <- myae.depth %>% tidyr::pivot_longer(3:271, "Ind", "Value")
+hist(myae.depth$value)
+
+Myrmecophilus_samples_simon <- read.delim("~/mse/RADseq/Myrmecophilus_samples_simon.csv") %>%
+  mutate(Ind=substr(ID,5,8)) %>% select(Ind, sex)
+
+df <- left_join(myae.depth, Myrmecophilus_samples_simon, "Ind")
+
+ggplot(df,
+       aes(x=sex,
+           y=value,
+           color=sex))+
+  geom_boxplot()+
+  ylim(c(0,100))
+
+ggplot(df,
+       aes(x=value,
+           fill=sex,
+           color=sex))+
+  geom_histogram()+
+  xlim(c(0,100))
+
+quantile(df$value, 0.25)
+quantile(df$value, 0.25)
+
+```
+
+```{bash, eval=F}
+cd ~/MSE/RADseq/
+
+~/soft/vcftools_0.1.13/bin/vcftools \
+--vcf myae.vcf \
+--min-meanDP 6 \
+--max-missing 0.7 \
+--recode \
+--recode-INFO-all --out myae.filtered
+
+#--maf 0.05  \
+cut -f 1,13 ~/mse/RADseq/Myrmecophilus_samples_simon.csv | grep -E 'structor|cruentatus'
+
+grep 'structor' ~/mse/RADseq/Myrmecophilus_samples_simon.csv | cut -f 1 | sed 's/19.0//g' > structor.txt
+grep 'cruentatus' ~/mse/RADseq/Myrmecophilus_samples_simon.csv | cut -f 1 | sed 's/19.0//g' > cruentatus.txt
+
+grep -v "nan" ~/MSE/RADseq/structor_vs_cruentatus.weir.fst | awk 'NR!=1 {print "Myr\t"$1"\t"$2"\t"$2"\t"$3}'  > structor_vs_cruentatus.weir.fst.2
+
+~/soft/vcftools_0.1.13/bin/vcftools \
+--vcf myae.filtered.recode.vcf \
+--weir-fst-pop structor.txt \
+--weir-fst-pop cruentatus.txt \
+--out structor_vs_cruentatus
+
+
+cut -f 1,34 ~/mse/RADseq/Myrmecophilus_samples_simon.csv | grep 'female' | cut -f 1 | sed 's/19.0//g' > females.txt
+cut -f 1,34 ~/mse/RADseq/Myrmecophilus_samples_simon.csv | grep 'Y' | cut -f 1 | sed 's/19.0//g' > males.txt
+
+~/soft/vcftools_0.1.13/bin/vcftools \
+--vcf myae.filtered.recode.vcf \
+--weir-fst-pop females.txt \
+--weir-fst-pop males.txt \
+--out females_vs_males
+
+grep -v "nan" ~/MSE/RADseq/females_vs_males.weir.fst | awk 'NR!=1 {print "Myr\t"$1"\t"$2"\t"$2"\t"$3}'  > females_vs_males.weir.fst.2
+
+
+
+cut -f 1,34 ~/mse/RADseq/Myrmecophilus_samples_simon.csv | grep 'Ya' | cut -f 1 | sed 's/19.0//g' > Ya.txt
+cut -f 1,34 ~/mse/RADseq/Myrmecophilus_samples_simon.csv | grep 'Yb' | cut -f 1 | sed 's/19.0//g' > Yb.txt
+
+~/soft/vcftools_0.1.13/bin/vcftools \
+--vcf myae.filtered.recode.vcf \
+--weir-fst-pop Ya.txt \
+--weir-fst-pop Yb.txt \
+--out Ya_vs_Yb
+
+grep -v "nan" ~/MSE/RADseq/Ya_vs_Yb.weir.fst | awk 'NR!=1 {print "Myr\t"$1"\t"$2"\t"$2"\t"$3}'  > Ya_vs_Yb.weir.fst.2
+
+cd ~/MSE/RADseq/
+
+cut -f 1,34 ~/mse/RADseq/Myrmecophilus_samples_simon.csv | awk -v FS="\t" '{
+if ($2=="male (Ya)")
+	print $1"\tYa";
+else if ($2=="male (Yb)")
+	print $1"\tYb";
+}' | sed 's/19.0//g' > Ys_Groups.txt
+
+cut -f 1 Ys_Groups.txt > Ys_Inds.txt
+
+~/soft/vcftools_0.1.13/bin/vcftools \
+--vcf /home/vincent/MSE/RADseq/myae.filtered.recode.vcf \
+--keep Ys_Inds.txt \
+--recode \
+--recode-INFO-all --out Ys
+
+python3 ~/ogv/vcf_utilities/main.py \
+--groups /home/vincent/MSE/RADseq/Ys_Groups.txt \
+--vcf /home/vincent/MSE/RADseq/Ys.recode.vcf \
+--windows /home/vincent/MSE/Ratio/SNPs/Myr.bins \
+--sp Myr \
+--variable Coverage \
+--perInd FALSE \
+--output /home/vincent/MSE/Ratio/SNPs/MonCul.cov
+
+
+cut -f 1,34 ~/mse/RADseq/Myrmecophilus_samples_simon.csv | grep 'female' | cut -f 1 | sed 's/19.0//g' | head -n 50 > femalesA.txt
+cut -f 1,34 ~/mse/RADseq/Myrmecophilus_samples_simon.csv | grep 'Y' | cut -f 1 | sed 's/19.0//g' | tail -n 100 | head -n 50 > femalesB.txt
+
+~/soft/vcftools_0.1.13/bin/vcftools \
+--vcf myae.filtered.recode.vcf \
+--weir-fst-pop femalesA.txt \
+--weir-fst-pop femalesB.txt \
+--out femalesA_vs_femalesB
+
+grep -v "nan" ~/MSE/RADseq/femalesA_vs_femalesB.weir.fst | awk 'NR!=1 {print "Myr\t"$1"\t"$2"\t"$2"\t"$3}'  > femalesA_vs_femalesB.weir.fst.2
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+cut -f 1,2 ~/mse/RADseq/Myrmecophilus_samples_simon.csv | awk -v FS="\t" '{
+if ($2=="M. myrmecophilus")
+	print $1"\tmyr";
+else if ($2=="M. aequispina")
+	print $1"\taeq";
+}' | sed 's/19.0//g' > myr_vs_aeq_Groups.txt
+
+cut -f 1 myr_vs_aeq_Groups.txt > myr_vs_aeq_Inds.txt
+
+cut -f 1,2 ~/mse/RADseq/Myrmecophilus_samples_simon.csv | awk -v FS="\t" '{
+if ($2=="M. myrmecophilus")
+	print $1;
+}' | sed 's/19.0//g' > myr_Inds.txt
+
+cut -f 1,2 ~/mse/RADseq/Myrmecophilus_samples_simon.csv | awk -v FS="\t" '{
+if ($2=="M. aequispina")
+	print $1;
+}' | sed 's/19.0//g' > aeq_Inds.txt
+
+~/soft/vcftools_0.1.13/bin/vcftools \
+--vcf myae.filtered.recode.vcf \
+--weir-fst-pop aeq_Inds.txt \
+--weir-fst-pop myr_Inds.txt \
+--out myr_vs_aeq
+
+grep -v "nan" ~/MSE/RADseq/myr_vs_aeq.weir.fst | awk 'NR!=1 {print "Myr\t"$1"\t"$2"\t"$2"\t"$3}'  > myr_vs_aeq.weir.fst.2
+
+~/soft/vcftools_0.1.13/bin/vcftools \
+--vcf /home/vincent/MSE/RADseq/myae.filtered.recode.vcf \
+--keep myr_vs_aeq_Inds.txt \
+--recode \
+--recode-INFO-all --out myr_vs_aeq
+
+python3 ~/ogv/vcf_utilities/main.py \
+--groups /home/vincent/MSE/RADseq/myr_vs_aeq_Groups.txt \
+--vcf /home/vincent/MSE/RADseq/myr_vs_aeq.recode.vcf \
+--windows /home/vincent/MSE/Ratio/SNPs/Myr.bins \
+--sp Myr \
+--variable Coverage \
+--perInd FALSE \
+--output /home/vincent/MSE/Ratio/SNPs/myr_vs_aeq.cov
+
+
+
+
+cut -f 1,2,34 ~/mse/RADseq/Myrmecophilus_samples_simon.csv | awk -v FS="\t" '{
+if ($2=="M. myrmecophilus" && $3=="female ")
+	print $1"\tmyr";
+else if ($2=="M. aequispina" && $3=="female ")
+	print $1"\taeq";
+}' | sed 's/19.0//g' > myr_vs_aeq_females_Groups.txt
+
+cut -f 1 myr_vs_aeq_females_Groups.txt > myr_vs_aeq_females_Inds.txt
+
+cut -f 1,2,34 ~/mse/RADseq/Myrmecophilus_samples_simon.csv | awk -v FS="\t" '{
+if ($2=="M. myrmecophilus" && $3=="female ")
+	print $1;
+}' | sed 's/19.0//g' > myr_females_Inds.txt
+
+cut -f 1,2,34 ~/mse/RADseq/Myrmecophilus_samples_simon.csv | awk -v FS="\t" '{
+if ($2=="M. aequispina" && $3=="female ")
+	print $1;
+}' | sed 's/19.0//g' > aeq_females_Inds.txt
+
+~/soft/vcftools_0.1.13/bin/vcftools \
+--vcf myae.filtered.recode.vcf \
+--weir-fst-pop myr_females_Inds.txt \
+--weir-fst-pop aeq_females_Inds.txt \
+--out myr_vs_aeq_female
+
+grep -v "nan" ~/MSE/RADseq/myr_vs_aeq_female.weir.fst | awk 'NR!=1 {print "Myr\t"$1"\t"$2"\t"$2"\t"$3}'  > myr_vs_aeq_female.wier.fst.2
+```
+
+#
+
+```{r, eval=F}
+Plop <- read.delim("/home/vincent/mse/RADseq/Myrmecophilus_samples_simon.csv")
+head(Plop)
+
+table(Plop$species,Plop$status)
+```
+## mornas
+
+```{bash, eval=F}
+mkdir /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/stacks_mornas
+cd /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/stacks_mornas
+
+
+for File in `sed 1,1D ../Myrmecophilus_samples_simon.csv  | sed  's/19.0//g' | awk '{print $1}'`
+do
+  echo $File
+  ls /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/mapped/$File.bam
+done
+
+
+
+awk -F'\t' '{
+if($34!="indet." && $16=="Mornas" && $16!="tri") 
+{print substr($1,5), "mornas"}
+}' ../Myrmecophilus_samples_simon.csv | tr ' ' '\t' > popmap.txt
+#echo 'Myr_1 Myr
+#Myr_2 Myr
+#Myr_3 Myr
+#Myr_4 Myr
+#Myr_5 Myr
+#Myr_F Myr
+#Myr_Ya Myr
+#Myr_Yb Myr' | tr ' ' '\t' >> popmap.txt
+
+
+echo '#!/bin/bash -l
+
+#SBATCH --account=tschwand_default
+#SBATCH --mail-type NONE 
+#SBATCH --mail-user vincent.merel@unil.ch
+
+#SBATCH --chdir /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/stacks_mornas
+#SBATCH --job-name gstacks_populations
+#SBATCH --output gstacks_populations.out
+#SBATCH --error gstacks_populations.err
+
+#SBATCH --partition cpu
+
+#SBATCH --nodes 1 
+#SBATCH --ntasks 1 
+#SBATCH --cpus-per-task 12
+#SBATCH --mem 24G 
+#SBATCH --time 12:00:00 
+#SBATCH --export NONE
+
+module load gcc/9.3.0 stacks/2.53
+
+gstacks -I /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/mapped/ \
+-M ./popmap.txt \
+-O ./ -t 12
+
+populations -P ./ \
+-M ./popmap.txt \
+--vcf \
+--genepop \
+--fstats \
+--smooth \
+--min-maf 0 \
+--write-single-snp \
+--hwe -t 12
+
+#-r 0.65 \
+' > /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/stacks_mornas/gstacks_populations.sh
+
+sbatch /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/stacks_mornas/gstacks_populations.sh
+
+
+cd ~/MSE/RADseq/
+cp mornas.vcf mornas.vcf.saved
+scp vmerel@curnagl.dcsr.unil.ch:/work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/stacks_mornas/populations.snps.vcf ./mornas.vcf
+
+~/soft/vcftools_0.1.13/bin/vcftools \
+--vcf mornas.vcf \
+--geno-depth --out mornas.depth
+
+```
+
+## others
+
+```{bash, eval=F}
+
+mkdir /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/stacks_others
+cd /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/stacks_others
+
+
+grep -E '19.0275a|19.0255a|19.0266a|19.0254a|19.0060a|19.0270a|19.0272a|19.0271a|19.0071b|19.0197a|19.0029a|19.0273a|19.0063a|19.0246a|19.0239a|19.0071a|19.0072a|19.0214a|19.0213a|19.0263a|19.0264a|19.0265a|19.0262a|19.0193a|19.0242a|19.0172a|19.0170a|19.0231a|19.0237a|19.0244a' ../Myrmecophilus_samples_simon.csv | awk  '{print substr($1,5)"\tothers"}' > popmap.txt
+
+
+echo '#!/bin/bash -l
+
+#SBATCH --account=tschwand_default
+#SBATCH --mail-type NONE 
+#SBATCH --mail-user vincent.merel@unil.ch
+
+#SBATCH --chdir /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/stacks_others
+#SBATCH --job-name gstacks_populations
+#SBATCH --output gstacks_populations.out
+#SBATCH --error gstacks_populations.err
+
+#SBATCH --partition cpu
+
+#SBATCH --nodes 1 
+#SBATCH --ntasks 1 
+#SBATCH --cpus-per-task 12
+#SBATCH --mem 24G 
+#SBATCH --time 12:00:00 
+#SBATCH --export NONE
+
+module load gcc/9.3.0 stacks/2.53
+
+gstacks -I /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/mapped/ \
+-M ./popmap.txt \
+-O ./ -t 12
+
+populations -P ./ \
+-M ./popmap.txt \
+--vcf \
+--genepop \
+--fstats \
+--smooth \
+--min-maf 0 \
+--write-single-snp \
+--hwe -t 12
+
+#-r 0.65 \
+' > /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/stacks_others/gstacks_populations.sh
+
+sbatch /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/stacks_others/gstacks_populations.sh
+
+
+cd ~/MSE/RADseq/
+scp vmerel@curnagl.dcsr.unil.ch:/work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/stacks_others/populations.snps.vcf ./others.vcf
+
+
+```
+
+
+
+```{bash, eval=F}
+
+cd ~/MSE/RADseq/
+
+~/soft/vcftools_0.1.13/bin/vcftools \
+--vcf others.vcf \
+--minDP 10 \
+--max-missing-count  28 \
+--recode \
+--recode-INFO-all --out others.filtered
+
+#--maf 0.05  \
+
+```
+
+## All
+
+```{bash, eval=F}
+
+mkdir /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/stacks_all
+cd /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/stacks_all
+
+ls /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/mapped/*bam | grep -v -E 'filtered|trimmed' | xargs -n 1 basename | sed 's/.bam//g' | awk  '{print $1"\tall"}' > popmap.txt
+
+
+echo '#!/bin/bash -l
+
+#SBATCH --account=tschwand_default
+#SBATCH --mail-type NONE 
+#SBATCH --mail-user vincent.merel@unil.ch
+
+#SBATCH --chdir /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/stacks_all
+#SBATCH --job-name gstacks_populations
+#SBATCH --output gstacks_populations.out
+#SBATCH --error gstacks_populations.err
+
+#SBATCH --partition cpu
+
+#SBATCH --nodes 1 
+#SBATCH --ntasks 1 
+#SBATCH --cpus-per-task 12
+#SBATCH --mem 24G 
+#SBATCH --time 12:00:00 
+#SBATCH --export NONE
+
+module load gcc/9.3.0 stacks/2.53
+
+gstacks -I /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/mapped/ \
+-M ./popmap.txt \
+-O ./ -t 12
+
+populations -P ./ \
+-M ./popmap.txt \
+--vcf \
+--genepop \
+--fstats \
+--smooth \
+--min-maf 0 \
+--write-single-snp \
+--hwe -t 12
+
+#-r 0.65 \
+' > /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/stacks_all/gstacks_populations.sh
+
+sbatch /work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/stacks_all/gstacks_populations.sh
+
+
+cd ~/MSE/RADseq/
+scp vmerel@curnagl.dcsr.unil.ch:/work/FAC/FBM/DEE/tschwand/default/vmerel/MSE/RADseq/stacks_others/populations.snps.vcf ./others.vcf
+
+
+```
+
+
+```{bash, eval=F}
+
+cd ~/MSE/RADseq/
+
+~/soft/vcftools_0.1.13/bin/vcftools \
+--vcf others.vcf \
+--min-meanDP 11 \
+--max-missing 0.8 \
+--recode \
+--recode-INFO-all --out others.filtered
+
+#--maf 0.05  \
+bgzip myae.filtered.recode.vcf 
+bgzip others.filtered.recode.vcf 
+tabix myae.filtered.recode.vcf.gz
+tabix others.filtered.recode.vcf.gz
+
+export PERL5LIB=~/soft/vcftools_0.1.13/perl
+~/soft/vcftools_0.1.13/bin/vcf-merge myae.filtered.recode.vcf others.filtered.recode.vcf
+~/soft/vcftools_0.1.13/bin/vcf-merge myae.filtered.recode.vcf.gz others.filtered.recode.vcf.gz | bgzip -c > All.vcf.gz
+
+S
+cut -f 1,9 ~/mse/RADseq/Myrmecophilus_samples_simon.csv  | grep
+
+```
+
+```{r, eval=F}
+others <- read.table("~/mse/RADseq/others.htz", quote="\"", comment.char="")
+colnames(others) <- c("Ind","Categ","NHtz")
+
+Myrmecophilus_samples_simon <- read.delim("~/mse/RADseq/Myrmecophilus_samples_simon.csv") %>%
+  mutate(Ind=substr(ID,5,8))
+
+others <- left_join(x=others,
+                     y=Myrmecophilus_samples_simon,
+                     by=c("Ind"))
+others$Type="others"
+
+#for the track
+track <- others[others$Categ=="X",] %>% select(Ind, status) %>%
+  filter(grepl("male|femelle", status)) %>%
+  mutate(sex=ifelse(
+    grepl("femelle", status),
+    "female",
+    "male")) %>%
+  select(Ind, sex)
+
+write.table(track,
+           "/home/vincent/MSE/RADseq/others.group",
+           row.names = F,
+           col.names = F,
+           quote =F,
+           sep ="\t")
+
+myae <- read.table("~/mse/RADseq/myae.htz", quote="\"", comment.char="")
+colnames(myae) <- c("Ind","Categ","NHtz")
+myae <- left_join(x=myae,
+                  y=Myrmecophilus_samples_simon,
+                  by=c("Ind")) 
+myae$Type="myae"
+All <- rbind(others,myae)
+
+ggplot(All,
+       aes(x=Categ,
+           y=NHtz,
+           color=status))+
+  geom_boxplot()+
+  facet_wrap(.~Type)
+```
+
+# PCA
+
+## myae
+
+```{r, eval=F}
+library(vcfR)
+library(dartR)
+library(adegenet)
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(RColorBrewer)
+
+vcf <- read.vcfR(file="/home/vincent/MSE/RADseq/myae.filtered.recode.vcf", verbose = TRUE)
+x <- vcfR2genlight(vcf)
+
+#toRemove <- is.na(glMean(x_wo, alleleAsUnit = FALSE)) # TRUE where NA
+#which(toRemove) # position of entirely non-typed loci
+#x_wo <- x_wo[, !toRemove]
+Myrmecophilus_samples_simon <- read.delim("~/mse/RADseq/Myrmecophilus_samples_simon.csv") %>%
+  mutate(Ind=substr(ID,5,8))
+
+classi <- read.table("~/MSE/circos/classi.csv", quote="\"", comment.char="")
+colnames(classi) <- c("Contig", "Categ")
+head(classi)
+
+for (categ in levels(classi$Categ)){
+  print(categ)
+  
+  ToRemove <- x@loc.names[!(as.character(x@chromosome)%in%classi$Contig[classi$Categ==categ])]
+  
+  x_filtered <- gl.drop.loc(x, ToRemove)
+
+  pca <- adegenet::glPca(x_filtered, nf = 10, parallel=TRUE)
+  
+  plots = list()
+  cpt_plot = 0
+  
+  for (XXX in c(1,3,5,7)){
+    
+    cpt_plot = cpt_plot+1
+    
+    pca_df <- data.frame(pc1=pca$scores[,XXX],
+                         pc2=pca$scores[,XXX+1])%>%
+    tibble::rownames_to_column("Ind")
+
+    pca_df <- dplyr::left_join(x=pca_df,
+                     y=Myrmecophilus_samples_simon,
+                     by=c("Ind")) 
+    
+
+    
+    plots[[cpt_plot]] <- ggplot(pca_df,
+                   aes(x=pc1,
+                       y=pc2,
+                       color=tri,
+                       shape=status))+
+      geom_point()+
+      ggtitle(paste("others",
+                    categ,
+                    "(N:",
+                    length(x_filtered$loc.names),
+                    ")"))+
+      theme_bw()+
+      theme(legend.position="bottom",
+            legend.title=element_blank(),
+            text = element_text(size = 6))+
+      xlab(paste("PC",
+                 as.character(XXX),
+                 ":",
+                 as.character(round(pca$eig[XXX]/sum(pca$eig),2))))+
+      ylab(xlab(paste("PC",
+                      as.character(XXX+1),
+                      ":",
+                      as.character(round(pca$eig[XXX+1]/sum(pca$eig),2)))))#+ scale_colour_brewer(palette = "Set3")
+    
+  }
+  
+  plot <- ggarrange(plots[[1]], plots[[2]], plots[[3]], plots[[4]], ncol=2, nrow=2, common.legend = TRUE, legend="bottom")
+
+  ggsave(plot = plot,
+           filename = paste("/home/vincent/Bureau/pca_myae",
+                            categ,
+                            ".png",
+                            sep=""),
+           units="px",
+           width = 2560,
+           height=1440)
+  
+
+}
+
+plots = list()
+plots[[1]] <- plot
+plots[[2]] <- plot
+plots[[3]] <- plot
+plots[[4]] <- plot
+library(ggpubr)
+
+A <- read.table("~/MSE/Vizualisation/(Pseudo)-Auto.1.pca_loadings.track", quote="\"", comment.char="")
+B <- read.table("~/MSE/Vizualisation/(Pseudo)-Auto.2.pca_loadings.track", quote="\"", comment.char="")
+C <- read.table("~/MSE/Vizualisation/(Pseudo)-Auto.3.pca_loadings.track", quote="\"", comment.char="")
+D <- read.table("~/MSE/Vizualisation/(Pseudo)-Auto.4.pca_loadings.track", quote="\"", comment.char="")
+E <- read.table("~/MSE/Vizualisation/(Pseudo)-Auto.5.pca_loadings.track", quote="\"", comment.char="")
+F <- read.table("~/MSE/Vizualisation/(Pseudo)-Auto.6.pca_loadings.track", quote="\"", comment.char="")
+G <- read.table("~/MSE/Vizualisation/(Pseudo)-Auto.7.pca_loadings.track", quote="\"", comment.char="")
+H<- read.table("~/MSE/Vizualisation/(Pseudo)-Auto.8.pca_loadings.track", quote="\"", comment.char="")
+
+hist(A$V4)
+hist(B$V4)
+hist(C$V4)
+hist(D$V4)
+
+plotA <- ggplot(A,
+       aes(x = V1,
+           y=V4))+geom_violin()
+plotB <- ggplot(B,
+       aes(x = V1,
+           y=V4))+geom_violin()
+plotC <- ggplot(C,
+       aes(x = V1,
+           y=V4))+geom_violin()
+plotD <- ggplot(D,
+       aes(x = V1,
+           y=V4))+geom_violin()
+plotE <- ggplot(E,
+       aes(x = V1,
+           y=V4))+geom_violin()
+plotF <- ggplot(F,
+       aes(x = V1,
+           y=V4))+geom_violin()
+plotG <- ggplot(G,
+       aes(x = V1,
+           y=V4))+geom_violin()
+plotH <- ggplot(H,
+       aes(x = V1,
+           y=V4))+geom_violin()
+
+plot <- ggarrange(plotA, plotB, plotC, plotD,
+          plotE, plotF, plotG, plotH,
+          ncol=2, nrow=4, common.legend = TRUE, legend="bottom")
+
+  ggsave(plot = plot,
+           filename = paste("/home/vincent/Bureau/ttsss",
+                            "cts",
+                            ".png",
+                            sep=""),
+           units="px",
+           width = 1440,
+           height=2560)
+```
+## Two X haplotypes
+
+
+## mornas
+
+```{r, eval=F}
+library(vcfR)
+library(dartR)
+library(adegenet)
+library(dplyr)
+library(ggplot2)
+library(RColorBrewer)
+
+vcf <- read.vcfR(file="/home/vincent/MSE/RADseq/mornas.filtered.recode.vcf", verbose = TRUE)
+x <- vcfR2genlight(vcf)
+
+#x <- gl.compliance.check(x)
+#x_wo <- gl.drop.ind(x, c("Myr_1",
+#                         "Myr_2",
+#                         "Myr_3",
+#                         "Myr_4",
+#                         "Myr_5",
+#                         "Myr_F",
+#                         "Myr_Ya",
+#                         "Myr_Yb"))
+
+#toRemove <- is.na(glMean(x_wo, alleleAsUnit = FALSE)) # TRUE where NA
+#which(toRemove) # position of entirely non-typed loci
+#x_wo <- x_wo[, !toRemove]
+Myrmecophilus_samples_simon <- read.delim("~/mse/RADseq/Myrmecophilus_samples_simon.csv") %>%
+  mutate(Ind=substr(ID,5,8))
+
+classi <- read.table("~/MSE/circos/classi.csv", quote="\"", comment.char="")
+colnames(classi) <- c("Contig", "Categ")
+head(classi)
+
+for (categ in levels(classi$Categ)){
+  print(categ)
+  
+  ToRemove <- x@loc.names[!(as.character(x@chromosome)%in%classi$Contig[classi$Categ==categ])]
+  
+  x_filtered <- gl.drop.loc(x, ToRemove)
+
+  pca <- adegenet::glPca(x_filtered, nf = 10, parallel=TRUE)
+  
+  pca_df <- data.frame(pc1=pca$scores[,1],
+                  pc2=pca$scores[,2])%>%
+    tibble::rownames_to_column("Ind")
+
+  pca_df <- dplyr::full_join(x=pca_df,
+                     y=Myrmecophilus_samples_simon,
+                     by=c("Ind"))
+  
+  plot <- ggplot(pca_df,
+       aes(x=pc1,
+           y=pc2,
+           color=tri,
+           shape=sex))+
+    geom_point()+
+    ggtitle(paste("mornas",
+                  categ,
+                  "(N:",
+                  length(x_filtered$loc.names),
+                  ")"))+
+    theme_bw()+
+    theme(legend.position="bottom")+
+    xlab(paste("PC1:",
+               as.character(round(pca$eig[1]/sum(pca$eig),2))))+
+    ylab(xlab(paste("PC2:",
+               as.character(round(pca$eig[2]/sum(pca$eig),2)))))
+           
+  
+  ggsave(plot = plot,
+         filename = paste("/home/vincent/Bureau/pca_mornas",
+                          categ,
+                          ".png",
+                          sep=""),
+         units="px",
+         width = 2560,
+         height=1440)
+}
+
+
+```
+
+# Finding SIMONs loci !
+
+```{bash, eval=F}
+mkdir 
+head -n 1 /work/FAC/FBM/DEE/tschwand/default/abrandt/svogel6/myrmecophilus/output_2/X-linked_ID.txt
+grep '301270' batch_2.catalog.tags.tsv
+
+
+head -n 100 /work/FAC/FBM/DEE/tschwand/default/abrandt/svogel6/myrmecophilus/output_2/X-linked_ID.txt | tail -n 1
+grep '301270' batch_2.catalog.tags.tsv
+
+head -n 150 /work/FAC/FBM/DEE/tschwand/default/abrandt/svogel6/myrmecophilus/output_2/X-linked_ID.txt | tail -n 1
+grep '8209989' batch_2.catalog.tags.tsv
+
+
+#Blasting
+echo '>301270' > Test.fa
+grep '301270' batch_2.catalog.tags.tsv| cut -f 10 >> Test.fa
+
+makeblastdb -in  /home/vincent/MSE/circos/Assembly.fasta -dbtype nucl
+
+blastn -query /home/vincent/MSE/RADseq/Test.fa  \
+-db /home/vincent/MSE/circos/Assembly.fasta
+***** No hits found *****
+
+#Blasting
+echo '>8209989' > Test.fa
+grep '8209989' batch_2.catalog.tags.tsv| cut -f 10 >> Test.fa
+
+blastn -query /home/vincent/MSE/RADseq/Test.fa  \
+-db /home/vincent/MSE/circos/Assembly.fasta
+***** No hits found *****
+
+
+#
+head -n 1 /nas/FAC/FBM/DEE/tschwand/default/D2c/myrmecophilus/data/sex-linked_IDs.txt
+grep -w '2554' batch_2.catalog.tags.tsv
+
+head -n 100 /nas/FAC/FBM/DEE/tschwand/default/D2c/myrmecophilus/data/sex-linked_IDs.txt
+grep -w '54531' batch_2.catalog.tags.tsv
+
+
+#Blasting
+echo '>2554' > Test.fa
+grep '2554' batch_2.catalog.tags.tsv| cut -f 10 >> Test.fa
+
+blastn -query /home/vincent/MSE/RADseq/Test.fa  \
+-db /home/vincent/MSE/circos/Assembly.fasta -outfmt 6
+
+#Blasting
+echo '>5000' > Test.fa
+grep -w '5000' batch_2.catalog.tags.tsv| cut -f 10 >> Test.fa
+
+blastn -query /home/vincent/MSE/RADseq/Test.fa  \
+-db /home/vincent/MSE/circos/Assembly.fasta -outfmt 6
+
+
+#Blasting
+echo '>5500' > Test.fa
+grep -w '5500' batch_2.catalog.tags.tsv| cut -f 10 >> Test.fa
+
+blastn -query /home/vincent/MSE/RADseq/Test.fa  \
+-db /home/vincent/MSE/circos/Assembly.fasta -outfmt 6
+
+
+#Blasting
+echo '>2100' > Test.fa
+grep -w '2100' batch_2.catalog.tags.tsv| cut -f 10 >> Test.fa
+
+blastn -query /home/vincent/MSE/RADseq/Test.fa  \
+-db /home/vincent/MSE/circos/Assembly.fasta -outfmt 6
+
+
+
+#Blasting
+echo '>56752' > Test.fa
+grep -w '56752' batch_2.catalog.tags.tsv| cut -f 10 >> Test.fa
+
+blastn -query /home/vincent/MSE/RADseq/Test.fa  \
+-db /home/vincent/MSE/circos/Assembly.fasta -outfmt 6
+
+
+#Blasting
+echo '>84570' > Test.fa
+grep -w '84570' batch_2.catalog.tags.tsv| cut -f 10 >> Test.fa
+
+blastn -query /home/vincent/MSE/RADseq/Test.fa  \
+-db /home/vincent/MSE/circos/Assembly.fasta -outfmt 6
+
+38940
+```
+
+## Blast approach
+
+```{bash, eval=F}
+scp vmerel@curnagl.dcsr.unil.ch:/nas/FAC/FBM/DEE/tschwand/default/D2c/myrmecophilus/data/sex_linked.fa ./
+blastn -query /home/vincent/MSE/RADseq/sex_linked.fa  \
+-db /home/vincent/MSE/circos/Assembly.fasta -outfmt 6 | cut -f 2,
+
+blastn -query /home/vincent/MSE/RADseq/sex_linked.fa  \
+-db /home/vincent/MSE/circos/Assembly.fasta -outfmt 6 | cut -f 2,9,10 > /home/vincent/MSE/circos/sexLinkedTrack
+```
+
+
+```{bash, eval=F}
+cd /home/vincent/MSE/RADseq/stacks/
+
+CONTIGs=`cat candidate_contigs.csv | tr '\n' ' '`
+~/soft/vcftools_0.1.13/bin/vcftools --max-missing 0.5 --vcf filtered.recode.vcf $CONTIGs --recode --recode-INFO-all --out candidate
+
+```
+
+```{r, eval=F}
+library(vcfR)
+vcf <- read.vcfR(file="/home/vincent/MSE/RADseq/stacks/candidate.recode.vcf", verbose = TRUE, convertNA=FALSE)
+x <- vcfR2genlight(vcf)
+
+#library(dartR)
+#x_filtered <- gl.filter.maf(x, threshold = 0.01, verbose = NULL)
+
+library(adegenet)
+pca1 <- adegenet::glPca(x)
+
+toRemove <- is.na(glMean(x, alleleAsUnit = FALSE)) # TRUE where NA
+which(toRemove) # position of entirely non-typed loci
+b <- x[, !toRemove]
+
+pca1 <- adegenet::glPca(b)
+
+popmap <- read.delim("~/MSE/RADseq/stacks/popmap.txt", header=FALSE)
+colnames(popmap) <- c("Ind",
+                      "Pop")
+PCA <- data.frame(pc1=pca1$scores[,1],
+                  pc2=pca1$scores[,2])%>% tibble::rownames_to_column("Ind")
+
+PCA <- PCA %>% dplyr::full_join(x=PCA,
+                                y=popmap,
+                                by=c("Ind"))
+ggplot(PCA,
+       aes(x=pc1,
+           y=pc2,
+           color=Pop))+geom_point()
+
+PCA_var <- data.frame(Contig=as.character(x@chromosome),
+                      Start=as.character(x@position),
+                      End=as.character(x@position),
+                      value=pca1$loadings[,1]) 
+
+
+hist(PCA_var$value)
+PCA_var <- PCA_var %>%
+  filter(value > 0.01 | value < -0.01)
+
+df <- data.frame(Contig=as.character(unique(PCA_var$Contig)))  
+
+write.csv2(df,
+           "/home/vincent/MSE/RADseq/stacks/candidate_contigs.csv",
+           row.names = F,
+           quote=F)
+
+
+PCA_var <- data.frame(pc1=pca1$loadings[,1],
+                  pc2=pca1$scores[,2]
+
+hist(pca1$loadings[,1])
+popmap$Pop <- as.character(popmap$Pop)
+
+popmap$Pop[popmap$Pop=="XYa" | popmap$Pop=="XYb"] <- "XY"
+dapc1 <- dapc(x, n.pca=9, n.da=1, pop=popmap$Pop)
+
+
+
+plopA <- as.data.frame(pca1$scores)
+plopA$Pop <- popmap$Pop
+  
+write.table(PCA,
+            "/home/vincent/MSE/circos/PCA.track",
+            quote=F,
+            sep = " ",
+            col.names = F,
+            row.names = F)
+
+#f
+myFreq <- glMean(x)
+hist(myFreq, proba=TRUE, col="gold", xlab="Allele frequencies",
+main="Distribution of (second) allele frequencies")
+temp <- density(myFreq)
+lines(temp$x, temp$y*1.8,lwd=3)
+
+
+```
+
+# SDpop
+
+```{bash, eval=F}
+cd /home/vincent/MSE/RADseq/stacks/
+
+Males=`grep 'XY' popmap.txt | cut -f 1 | tr '\n' ','`
+Females=`grep 'XX' popmap.txt | cut -f 1 | tr '\n' ','`
+
+~/soft/vcftools_0.1.13/bin/vcftools --vcf populations.snps.vcf --maf 0.05  --recode --recode-INFO-all --out filtered
+
+~/soft/sdpop/popsum populations.snps.vcf populations.snps.cnt v $Females $Males
+~/soft/sdpop/popsum filtered.recode.vcf filtered.recode.cnt v $Females $Males
+
+
+~/soft/sdpop/sdpop populations.snps.cnt populations.snps.out e x 1 1 s
+~/soft/sdpop/sdpop filtered.recode.cnt filtered.recode.out e x 1 1 s
+
+grep '>' populations.snps.out | tr ' ' '\t' > populations.snps.out.contigs
+grep -v '>' populations.snps.out | tr ' ' '\t' |tail -n +2 > populations.snps.out.pos
+
+
+grep '>' filtered.recode.out | tr ' ' '\t' > filtered.recode.out.contigs
+grep -v '>' filtered.recode.out | tr ' ' '\t' |tail -n +2 > filtered.recode.out.pos
+
+```
+
+```{r, eval=F}
+populations.snps.out <- read.delim("~/MSE/RADseq/stacks/filtered.recode.out.contigs", header=TRUE)
+
+populations.snps.out <- read.delim("~/MSE/RADseq/stacks/filtered.recode.out.pos", header=TRUE)
+
+hist(populations.snps.out$noprior_autosomal)
+hist(populations.snps.out$noprior_haploid)
+hist(populations.snps.out$noprior_paralog)
+hist(populations.snps.out$noprior_xhemizygote)
+hist(populations.snps.out$noprior_xy)
+
+ggplot(populations.snps.out,
+       aes(x=noprior_autosomal,
+           y=noprior_xhemizygote))+geom_point()
+
+
+sdpop  <- populations.snps.out %>%
+  select(Contig, Start, End, XYb) 
+
+```
+
+```{bash, eval=F}
+cd ~/MSE/RADseq/stacks
+
+gedit ~/mse/RADseq/Scripts/sdpop_parser.py &
+
+python3 ~/mse/RADseq/Scripts/sdpop_parser.py 
+```
+
+# The extreme
